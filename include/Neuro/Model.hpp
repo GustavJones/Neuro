@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <mutex>
 
 namespace Neuro {
   static const std::string SAVE_LAYERS_BOUNDARY_DELIMITER = "\x0A\x0A\x0A";
@@ -15,17 +16,23 @@ namespace Neuro {
 
   class Model {
   private:
+    mutable std::mutex m_accessing;
+
     ERROR_FUNCTION m_error;
     std::vector<std::vector<Neuro::Neuron>> m_neurons;
     uint32_t m_inputsCount;
 
-    bool _IsDelimitersValid() const;
+    static bool _IsDelimitersValid();
 
-    bool _IsPresentAtIndex(const std::vector<char> &_charArray, const size_t _index, const std::string &_string) const;
+    static bool _IsPresentAtIndex(const std::vector<char> &_charArray, const size_t _index, const std::string &_string);
 
   public:
     Model();
     Model(const std::vector<uint32_t> &_layers, const ACTIVATION_FUNCTION _defaultActivationFunction, const ERROR_FUNCTION _errorFunction, const double_t _randomBottom = -1, const double_t _randomTop = 1);
+    Model(Model&& _obj);
+    Model(const Model& _obj);
+    Model& operator=(Model&& _obj);
+    Model& operator=(const Model& _obj);
 
     void Setup(const std::vector<uint32_t> &_layers, const ACTIVATION_FUNCTION _defaultActivationFunction, const ERROR_FUNCTION _errorFunction, const double_t _randomBottom = -1, const double_t _randomTop = 1);
 

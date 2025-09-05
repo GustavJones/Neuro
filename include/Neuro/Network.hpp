@@ -5,6 +5,8 @@
 #include <vector>
 
 namespace Neuro {
+  extern const bool USE_THREADS;
+
   class Network {
   private:
     Network() = delete;

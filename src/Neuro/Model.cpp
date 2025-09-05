@@ -8,23 +8,29 @@
 #include <string>
 #include <vector>
 
-namespace Neuro {
-bool Model::_IsDelimitersValid() const {
-  // Check delimiters
-  if (SAVE_LAYERS_DELIMITER == SAVE_NEURONS_DELIMITER) {
-    return false;
-  }
+static std::mutex delimitersMutex;
 
-  if (SAVE_LAYERS_DELIMITER == SAVE_LAYERS_BOUNDARY_DELIMITER) {
+namespace Neuro {
+bool Model::_IsDelimitersValid() {
+  // Check delimiters
+  delimitersMutex.lock();
+  if (SAVE_LAYERS_DELIMITER == SAVE_NEURONS_DELIMITER) {
+    delimitersMutex.unlock();
     return false;
   }
+  
+  if (SAVE_LAYERS_DELIMITER == SAVE_LAYERS_BOUNDARY_DELIMITER) {
+    delimitersMutex.unlock();
+    return false;
+  }
+  delimitersMutex.unlock();
 
   return true;
 }
 
 bool Model::_IsPresentAtIndex(const std::vector<char> &_charArray,
                               const size_t _index,
-                              const std::string &_string) const {
+                              const std::string &_string) {
   bool delimiterFound = false;
   for (size_t charIndex = 0; charIndex < _string.length(); charIndex++) {
     if (_charArray[_index + charIndex] != _string[charIndex]) {
@@ -39,7 +45,7 @@ bool Model::_IsPresentAtIndex(const std::vector<char> &_charArray,
   return delimiterFound;
 }
 
-Model::Model() : m_error(nullptr), m_neurons(), m_inputsCount(0) {}
+Model::Model() : m_error(nullptr), m_neurons(), m_inputsCount(0), m_accessing() {}
 
 Model::Model(const std::vector<uint32_t> &_layers,
              const ACTIVATION_FUNCTION _defaultActivationFunction,
@@ -48,12 +54,95 @@ Model::Model(const std::vector<uint32_t> &_layers,
   Setup(_layers, _defaultActivationFunction, _errorFunction);
 }
 
+Model::Model(Model&& _obj) {
+  SetErrorFunction(_obj.GetErrorFunction());
+
+  m_accessing.lock();
+  m_neurons.resize(_obj.GetLayerCount());
+  for (size_t layer = 0; layer < _obj.GetLayerCount(); layer++)
+  {
+    m_neurons[layer].resize(_obj.GetLayerSize(layer));
+
+    for (size_t neuron = 0; neuron < _obj.GetLayerSize(layer); neuron++)
+    {
+      m_neurons[layer][neuron] = _obj.GetNeuron(layer, neuron);
+    }
+  }
+
+  m_inputsCount = _obj.GetInputAmount();
+
+  m_accessing.unlock();
+}
+
+Model::Model(const Model& _obj) {
+  SetErrorFunction(_obj.GetErrorFunction());
+
+  m_accessing.lock();
+  m_neurons.resize(_obj.GetLayerCount());
+  for (size_t layer = 0; layer < _obj.GetLayerCount(); layer++)
+  {
+    m_neurons[layer].resize(_obj.GetLayerSize(layer));
+
+    for (size_t neuron = 0; neuron < _obj.GetLayerSize(layer); neuron++)
+    {
+      m_neurons[layer][neuron] = _obj.GetNeuron(layer, neuron);
+    }
+  }
+
+  m_inputsCount = _obj.GetInputAmount();
+
+  m_accessing.unlock();
+}
+
+Model& Model::operator=(Model&& _obj) {
+  SetErrorFunction(_obj.GetErrorFunction());
+
+  m_accessing.lock();
+  m_neurons.resize(_obj.GetLayerCount());
+  for (size_t layer = 0; layer < _obj.GetLayerCount(); layer++)
+  {
+    m_neurons[layer].resize(_obj.GetLayerSize(layer));
+
+    for (size_t neuron = 0; neuron < _obj.GetLayerSize(layer); neuron++)
+    {
+      m_neurons[layer][neuron] = _obj.GetNeuron(layer, neuron);
+    }
+  }
+
+  m_inputsCount = _obj.GetInputAmount();
+
+  m_accessing.unlock();
+  return *this;
+}
+
+Model& Model::operator=(const Model& _obj) {
+  SetErrorFunction(_obj.GetErrorFunction());
+
+  m_accessing.lock();
+  m_neurons.resize(_obj.GetLayerCount());
+  for (size_t layer = 0; layer < _obj.GetLayerCount(); layer++)
+  {
+    m_neurons[layer].resize(_obj.GetLayerSize(layer));
+
+    for (size_t neuron = 0; neuron < _obj.GetLayerSize(layer); neuron++)
+    {
+      m_neurons[layer][neuron] = _obj.GetNeuron(layer, neuron);
+    }
+  }
+
+  m_inputsCount = _obj.GetInputAmount();
+
+  m_accessing.unlock();
+  return *this;
+}
+
 void Model::Setup(const std::vector<uint32_t> &_layers,
                   const ACTIVATION_FUNCTION _defaultActivationFunction,
                   const ERROR_FUNCTION _errorFunction,
                   const double_t _randomBottom, const double_t _randomTop) {
   SetErrorFunction(_errorFunction);
 
+  m_accessing.lock();
   if (_layers.size() > 0) {
     m_inputsCount = _layers[0];
   } else {
@@ -61,12 +150,16 @@ void Model::Setup(const std::vector<uint32_t> &_layers,
   }
 
   m_neurons.resize(_layers.size() - 1);
+  m_accessing.unlock();
 
   for (size_t i = 0; i < m_neurons.size(); i++) {
+    m_accessing.lock();
     auto &layer = m_neurons[i];
     layer.resize(_layers[i + 1]);
+    m_accessing.unlock();
   }
 
+  m_accessing.lock();
   for (size_t i = 0; i < _layers.size() - 1; i++) {
     for (size_t j = 0; j < m_neurons[i].size(); j++) {
       m_neurons[i][j].SetInputAmount(_layers[i]);
@@ -74,12 +167,18 @@ void Model::Setup(const std::vector<uint32_t> &_layers,
       m_neurons[i][j].Randomize(_randomBottom, _randomTop);
     }
   }
+  m_accessing.unlock();
 }
 
 bool Model::IsValid() const {
+  m_accessing.lock();
+
   if (m_error == nullptr) {
+    m_accessing.unlock();
     return false;
   }
+
+  m_accessing.unlock();
 
   if (GetLayerCount() <= 0) {
     return false;
@@ -92,15 +191,15 @@ bool Model::IsValid() const {
   for (size_t layer = 0; layer < GetLayerCount(); layer++) {
     if (layer == 0) {
       for (size_t neuron = 0; neuron < GetLayerSize(layer); neuron++) {
-        auto n = GetNeuron(layer, neuron);
-        if (n.GetWeightsReference().size() != GetInputAmount()) {
+        auto &n = GetNeuron(layer, neuron);
+        if (n.GetWeightsAmount() != GetInputAmount()) {
           return false;
         }
       }
     } else {
       for (size_t neuron = 0; neuron < GetLayerSize(layer); neuron++) {
-        auto n = GetNeuron(layer, neuron);
-        if (n.GetWeightsReference().size() != GetLayerSize(layer - 1)) {
+        auto &n = GetNeuron(layer, neuron);
+        if (n.GetWeightsAmount() != GetLayerSize(layer - 1)) {
           return false;
         }
       }
@@ -111,55 +210,101 @@ bool Model::IsValid() const {
 }
 
 void Model::SetErrorFunction(const ERROR_FUNCTION _errorFunction) {
+  m_accessing.lock();
   if (_errorFunction) {
     m_error = _errorFunction;
   } else {
+    m_accessing.unlock();
     throw std::runtime_error("Error function is null");
   }
+
+  m_accessing.unlock();
 }
 
 void Model::SetErrorFunction(const std::string &_errorFunctionString) {
+  m_accessing.lock();
   auto found = Neuro::ERROR_FUNCTION_LIST.find(_errorFunctionString)->second;
   if (found) {
     m_error = found;
   } else {
+    m_accessing.unlock();
     throw std::runtime_error("Error function string not found");
   }
+
+  m_accessing.unlock();
 }
 
-const ERROR_FUNCTION Model::GetErrorFunction() const { return m_error; }
+const ERROR_FUNCTION Model::GetErrorFunction() const { 
+  m_accessing.lock();
+  auto out = m_error;
+  m_accessing.unlock();
+  return out; 
+}
 
-uint32_t Model::GetInputAmount() const { return m_inputsCount; }
+uint32_t Model::GetInputAmount() const { 
+  m_accessing.lock();
+  auto out = m_inputsCount;
+  m_accessing.unlock();
+  return out; 
+}
 
-size_t Model::GetLayerCount() const { return m_neurons.size(); }
+size_t Model::GetLayerCount() const { 
+  m_accessing.lock();
+  auto out = m_neurons.size();
+  m_accessing.unlock();
+  return out; 
+}
 
 size_t Model::GetLayerSize(const size_t _layer) const {
-  return m_neurons[_layer].size();
+  m_accessing.lock();
+  auto out = m_neurons[_layer].size();
+  m_accessing.unlock();
+  return out;
 }
 
 Neuro::Neuron &Model::GetNeuron(const size_t _layer, const size_t _index) {
-  return m_neurons[_layer][_index];
+  m_accessing.lock();
+  auto& out = m_neurons[_layer][_index];
+  m_accessing.unlock();
+  return out;
 }
 
 const Neuro::Neuron &Model::GetNeuron(const size_t _layer,
                                       const size_t _index) const {
-  return m_neurons[_layer][_index];
+  m_accessing.lock();
+  auto& out = m_neurons[_layer][_index];
+  m_accessing.unlock();
+  return out;
 }
 
 void Model::Print() {
-  std::cout << "Error: " << (void *)m_error << std::endl;
-  std::cout << "Inputs: " << GetInputAmount() << std::endl;
+  const auto errorFunction = (void*)GetErrorFunction();
+  const auto inputs = GetInputAmount();
+  const auto layerCount = GetLayerCount();
+
+  std::vector<size_t> layerSizes(layerCount);
+
+  for (size_t i = 0; i < layerCount; i++)
+  {
+    layerSizes[i] = GetLayerSize(i);
+  }
+
+  m_accessing.lock();
+  std::cout << "Error: " << errorFunction << std::endl;
+  std::cout << "Inputs: " << inputs << std::endl;
   std::cout << "Layers: ";
 
-  for (size_t i = 0; i < GetLayerCount(); i++) {
-    if (i == GetLayerCount() - 1) {
-      std::cout << GetLayerSize(i);
+  for (size_t i = 0; i < layerCount; i++) {
+    if (i == layerCount - 1) {
+      std::cout << layerSizes[i];
     } else {
-      std::cout << GetLayerSize(i) << ", ";
+      std::cout << layerSizes[i] << ", ";
     }
   }
 
   std::cout << std::endl;
+
+  m_accessing.unlock();
 }
 
 bool Model::Save(
@@ -185,7 +330,7 @@ bool Model::Save(
   std::string errorFunctionString;
 
   for (const auto &errorKeyValuePair : _errorDeclarations) {
-    if (errorKeyValuePair.second == m_error) {
+    if (errorKeyValuePair.second == GetErrorFunction()) {
       errorFunctionString = errorKeyValuePair.first;
     }
   }
@@ -196,8 +341,10 @@ bool Model::Save(
   }
 
   f.write(errorFunctionString.c_str(), errorFunctionString.length());
+  delimitersMutex.lock();
   f.write(SAVE_LAYERS_BOUNDARY_DELIMITER.c_str(),
           SAVE_LAYERS_BOUNDARY_DELIMITER.length());
+  delimitersMutex.unlock();
 
   for (size_t layer = 0; layer < GetLayerCount(); layer++) {
 
@@ -218,40 +365,52 @@ bool Model::Save(
 
       f.write(activationFunctionString.c_str(),
               activationFunctionString.length());
+      delimitersMutex.lock();
       f.write(SAVE_NEURONS_ATTRIBUTES_DELIMITER.c_str(),
               SAVE_NEURONS_ATTRIBUTES_DELIMITER.length());
+      delimitersMutex.unlock();
 
       std::string biasString;
       std::string weightsString;
 
-      biasString = std::to_string(n.GetBiasReference());
+      biasString = std::to_string(n.GetBias());
       f.write(biasString.c_str(), biasString.length());
+      delimitersMutex.lock();
       f.write(SAVE_NEURONS_ATTRIBUTES_DELIMITER.c_str(),
               SAVE_NEURONS_ATTRIBUTES_DELIMITER.length());
+      delimitersMutex.unlock();
 
-      for (size_t weight = 0; weight < n.GetWeightsReference().size();
+      for (size_t weight = 0; weight < n.GetWeightsAmount();
            weight++) {
-        weightsString += std::to_string(n.GetWeightsReference()[weight]);
+        weightsString += std::to_string(n.GetWeight(weight));
+        delimitersMutex.lock();
         weightsString += SAVE_NEURONS_WEIGHTS_DELIMITER;
+        delimitersMutex.unlock();
       }
 
+      delimitersMutex.lock();
       if (weightsString.substr(weightsString.length() -
                                SAVE_NEURONS_WEIGHTS_DELIMITER.length()) ==
           SAVE_NEURONS_WEIGHTS_DELIMITER) {
         weightsString.erase(weightsString.length() -
                             SAVE_NEURONS_WEIGHTS_DELIMITER.length());
       }
+      delimitersMutex.unlock();
 
       f.write(weightsString.c_str(), weightsString.length());
 
       if (neuron != GetLayerSize(layer) - 1) {
+        delimitersMutex.lock();
         f.write(SAVE_NEURONS_DELIMITER.c_str(),
                 SAVE_NEURONS_DELIMITER.length());
+        delimitersMutex.unlock();
       }
     }
 
     if (layer != GetLayerCount() - 1) {
+      delimitersMutex.lock();
       f.write(SAVE_LAYERS_DELIMITER.c_str(), SAVE_LAYERS_DELIMITER.length());
+      delimitersMutex.unlock();
     }
   }
 
@@ -294,8 +453,14 @@ bool Model::Load(
   std::string errorFunctionString;
 
   index = 0;
-  while (index < readBuffer.size() - SAVE_LAYERS_BOUNDARY_DELIMITER.length()) {
+  delimitersMutex.lock();
+  const size_t saveLayersBoundaryDelimiterLength = SAVE_LAYERS_BOUNDARY_DELIMITER.length();
+  delimitersMutex.unlock();
+
+  while (index < readBuffer.size() - saveLayersBoundaryDelimiterLength) {
+    delimitersMutex.lock();
     delimiterFound = _IsPresentAtIndex(readBuffer, index, SAVE_LAYERS_BOUNDARY_DELIMITER);
+    delimitersMutex.unlock();
 
     if (delimiterFound) {
       break;
@@ -310,26 +475,38 @@ bool Model::Load(
 
   std::string layerString;
 
+  delimitersMutex.lock();
   index += SAVE_LAYERS_BOUNDARY_DELIMITER.length();
+  delimitersMutex.unlock();
+
   while (index < readBuffer.size()) {
     char c = readBuffer[index];
 
+    delimitersMutex.lock();
     delimiterFound = _IsPresentAtIndex(readBuffer, index, SAVE_LAYERS_DELIMITER);
+    delimitersMutex.unlock();
 
     if (delimiterFound || index == readBuffer.size() - 1) {
       std::string neuronString;
       int64_t neuronDelimiterIndex;
       std::vector<std::string> neuronsInLayer;
 
+      delimitersMutex.lock();
       neuronDelimiterIndex = layerString.find(SAVE_NEURONS_DELIMITER);
+      delimitersMutex.unlock();
 
       while (neuronDelimiterIndex != layerString.npos) {
         neuronString = layerString.substr(0, neuronDelimiterIndex);
+
+        delimitersMutex.lock();
         layerString.erase(0, neuronDelimiterIndex + SAVE_NEURONS_DELIMITER.length());
+        delimitersMutex.unlock();
 
         neuronsInLayer.push_back(neuronString);
 
+        delimitersMutex.lock();
         neuronDelimiterIndex = layerString.find(SAVE_NEURONS_DELIMITER);
+        delimitersMutex.unlock();
       }
 
       neuronString = layerString;
@@ -338,7 +515,9 @@ bool Model::Load(
       layerNeuronStrings.push_back(neuronsInLayer);
 
       layerString = "";
+      delimitersMutex.lock();
       index += SAVE_LAYERS_DELIMITER.length();
+      delimitersMutex.unlock();
       continue;
     }
 
@@ -365,20 +544,20 @@ bool Model::Load(
       std::string biasString = neuronString.substr(0, delimiterIndex);
       neuronString.erase(0, delimiterIndex + SAVE_NEURONS_ATTRIBUTES_DELIMITER.length());
 
-      GetNeuron(layer, neuron).GetBiasReference() = std::stod(biasString);
+      GetNeuron(layer, neuron).SetBias(std::stod(biasString));
 
       delimiterIndex = neuronString.find(SAVE_NEURONS_WEIGHTS_DELIMITER);
       while (delimiterIndex != neuronString.npos) {
         std::string weightString = neuronString.substr(0, delimiterIndex);
         neuronString.erase(0, delimiterIndex + SAVE_NEURONS_WEIGHTS_DELIMITER.length());
 
-        GetNeuron(layer, neuron).GetWeightsReference().push_back(std::stod(weightString));
+        GetNeuron(layer, neuron).PushBackWeight(std::stod(weightString));
 
         delimiterIndex = neuronString.find(SAVE_NEURONS_WEIGHTS_DELIMITER);
       }
 
       std::string weightString = neuronString;
-      GetNeuron(layer, neuron).GetWeightsReference().push_back(std::stod(weightString));
+      GetNeuron(layer, neuron).PushBackWeight(std::stod(weightString));
     }
   }
 

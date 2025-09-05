@@ -48,5 +48,7 @@ int main(int argc, char *argv[]) {
 
   m.Save("test.mdl");
 
+  std::cin.get();
+
   return 0;
 }
