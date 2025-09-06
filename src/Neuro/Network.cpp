@@ -1,16 +1,17 @@
 #include "Neuro/Network.hpp"
+#include "Neuro/Model.hpp"
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
 #include <future>
 #include <chrono>
+#include <random>
 
 namespace Neuro {
-static const bool USE_THREADS = true;
+const bool USE_THREADS = false;
 
 void Network::CalculateStructures(const Model &_model, const std::vector<double_t> &_inputs, UnactivatedStructure &_unactivated, ActivatedStructure &_activated) {
   const bool MULTITHREADED = false;
@@ -98,7 +99,7 @@ double_t Network::CalculateBatchMeanError(
   for (size_t i = 0; i < _batchInputs.size(); i++) {
     if (MULTITHREADED)
     {
-      threads.push_back(std::async(std::launch::async, &CalculateMeanError, _model, _batchInputs[i], _batchExpectedOutputs[i]));
+      threads.push_back(std::async(std::launch::async, [&, i](){return Neuro::Network::CalculateMeanError(_model, _batchInputs[i], _batchExpectedOutputs[i]);}));
     }
     else
     {
@@ -290,6 +291,8 @@ void Network::Train(
     const std::vector<std::vector<double_t>> &_batchInputs,
     const std::vector<std::vector<double_t>> &_batchExpectedOutputs,
     double_t _learningRate) {
+  const uint32_t LOG_INTERVAL_MS = 100;
+
   if (!_model.IsValid()) {
     throw std::runtime_error("Model not loaded correctly");
   }
@@ -313,7 +316,7 @@ void Network::Train(
     _model = m;
 
     timerCurrent = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(timerCurrent - timerLast).count() >= 200)
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(timerCurrent - timerLast).count() >= LOG_INTERVAL_MS)
     {
       std::cout << '\r' << "\x1b[0K" << "\tBatch Mean Error: " << meanError << "\tTrain Time: " << std::chrono::duration_cast<std::chrono::microseconds>(last - first).count() << " micro seconds" << '\r' << std::flush;
       timerLast = timerCurrent;
@@ -338,6 +341,36 @@ void Network::Train(
   std::cout << std::endl;
 
   std::cout << "Batches Trained: " << iteration << std::endl;
+}
+
+void Network::Mutate(Model& _model, const double_t _amount, const size_t _iterations) {
+  std::default_random_engine generator(time(nullptr));
+  std::uniform_int_distribution<uint32_t> layerRandomizer(0, _model.GetLayerCount() - 1);
+
+  for (size_t iteration = 0; iteration < _iterations; iteration++)
+  {
+    auto layer = layerRandomizer(generator);
+    std::uniform_int_distribution<uint32_t> neuronRandomizer(0, _model.GetLayerSize(layer) - 1);
+
+    auto neuron = neuronRandomizer(generator);
+
+    auto &n = _model.GetNeuron(layer, neuron);
+
+    std::uniform_int_distribution<uint32_t> attributeRandomizer(0, n.GetWeightsAmount());
+
+    auto attribute = attributeRandomizer(generator);
+
+    if (attribute == n.GetWeightsAmount())
+    {
+      auto currentBias = n.GetBias();
+      n.SetBias(currentBias + _amount);
+    }
+    else
+    {
+      auto currentWeight = n.GetWeight(attribute);
+      n.SetWeight(attribute, currentWeight + _amount);
+    }
+  }  
 }
 
 } // namespace Neuro

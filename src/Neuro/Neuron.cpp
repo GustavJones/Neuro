@@ -181,8 +181,7 @@ double_t Neuron::Calculate(const std::vector<double_t> &_input, bool _activated)
 
 void Neuron::Randomize(const double_t _bottomRange, const double_t _topRange) {
   std::default_random_engine generator(time(nullptr));
-  std::uniform_real_distribution<double_t> distribution(_bottomRange,
-                                                        _topRange);
+  std::uniform_real_distribution<double_t> distribution(_bottomRange, _topRange);
 
   for (size_t weight = 0; weight < GetWeightsAmount(); weight++) {
     m_accessing.lock();
